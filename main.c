@@ -27,6 +27,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "crc16.h"
 #include <stdio.h>
 #include <string.h>
 /** @addtogroup STM32F4xx_StdPeriph_Examples
@@ -105,7 +106,8 @@ int main(void)
   /* Wait until Tamper Button is pressed */
   while (!STM_EVAL_PBGetState(BUTTON_USER));  
    
-  sendTxDMA((uint32_t)btCmd[0],2);
+  *(uint16_t *) (aTxBuffer + 2) = crc16Compute(aTxBuffer,2);
+  sendTxDMA((uint32_t)aTxBuffer,4);
 
   
 #ifdef USART_RECEIVER
