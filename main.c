@@ -28,6 +28,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "crc16.h"
+#include "MPU6050.h"
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 /** @addtogroup STM32F4xx_StdPeriph_Examples
@@ -44,6 +46,7 @@ static DMA_InitTypeDef  DMA_InitStructure;
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
+volatile uint32_t time_var1, time_var2;
 uint8_t aTxBuffer[60] = "USART DMA Example: Communication between two USART using DMA";
 uint8_t aRxBuffer [300][BUFFERSIZE];
 uint8_t msgRcvd[300][60];
@@ -52,17 +55,38 @@ uint8_t RxBuffer2[BUFFERSIZE];
 uint8_t NbrOfDataToRead = 10;
 __IO uint32_t TimeOut = 0x0;   
 
+int16_t AccelGyro[8] = { 0 };
+double tempC;
+float    base_x_accel;
+float    base_y_accel;
+float    base_z_accel;
+float    base_x_gyro;
+float    base_y_gyro;
+float    base_z_gyro;
+float gyro_x;
+float gyro_y;
+float gyro_z;
+float accel_x;
+float accel_y;
+float accel_z;
+float lastAngle[3];
+float lastGyroAngle[3];
+unsigned long last_read_time;
+float angle_x;
+float angle_y;
+float angle_z;
+float dt;
+
 /* Private function prototypes -----------------------------------------------*/
 static void USART_Config(void);
 static void SysTickConfig(void);
 static void stopRXDMA(void);
 static void startRXDMAForSize(uint32_t adress,uint32_t size);
 static void sendTxDMA(uint32_t adress,uint32_t size);
-
-#ifdef USART_RECEIVER
-static TestStatus Buffercmp(uint8_t* pBuffer1, uint8_t* pBuffer2, uint16_t BufferLength);
-#endif /* USART_RECEIVER_MODE */
-
+void set_last_read_angle_data(unsigned long time, float x, float y, float z, float x_gyro, float y_gyro, float z_gyro);
+void calibrate_sensors();
+unsigned long millis();
+void Delay(volatile uint32_t nCount);
 /* Private functions ---------------------------------------------------------*/
 
 /**
@@ -82,7 +106,6 @@ int main(void)
   
   /* USART configuration -----------------------------------------------------*/
   USART_Config();
-  
     
   /* SysTick configuration ---------------------------------------------------*/
   SysTickConfig();
@@ -93,41 +116,170 @@ int main(void)
   STM_EVAL_LEDInit(LED5);
   STM_EVAL_LEDInit(LED6);
   
-  STM_EVAL_LEDOn(LED3);
-  STM_EVAL_LEDOn(LED4);
-  STM_EVAL_LEDOn(LED5);
-  STM_EVAL_LEDOn(LED6);
-
-
-  
+  STM_EVAL_LEDOn(LED3);//orange
+  STM_EVAL_LEDOn(LED4);//verte
+  STM_EVAL_LEDOn(LED5);//rouge
+  STM_EVAL_LEDOn(LED6);//bleue
+ 
   /* Tamper Button Configuration ---------------------------------------------*/
   STM_EVAL_PBInit(BUTTON_USER,BUTTON_MODE_GPIO);
-  
-  /* Wait until Tamper Button is pressed */
-  while (!STM_EVAL_PBGetState(BUTTON_USER));  
-   
-  *(uint16_t *) (aTxBuffer + 2) = crc16Compute(aTxBuffer,2);
-  sendTxDMA((uint32_t)aTxBuffer,4);
 
-  
-#ifdef USART_RECEIVER
-  
-   
-    /* Enable DMA USART RX Stream */
-  DMA_Cmd(USARTx_RX_DMA_STREAM,ENABLE);
-  
-  /* Enable USART DMA RX Requsts */
-  USART_DMACmd(USARTx, USART_DMAReq_Rx, ENABLE);
-  
-  /* Waiting the end of Data transfer */
-  while (USART_GetFlagStatus(USARTx,USART_FLAG_TC)==RESET);
-    
-  while(1){}
+  /* Initialization of the accelerometer -------------------------------------*/
+  MPU6050_I2C_Init();
+  MPU6050_Initialize();
 
-#endif /* USART_RECEIVER */
+  if (MPU6050_TestConnection() == TRUE) {
+		// connection success
+		STM_EVAL_LEDOff(LED3);
+  }else{
+                STM_EVAL_LEDOff(LED4);
+  }
+
+  //Calibration process
+  //  Use the following global variables and access functions
+  //  to calibrate the acceleration sensor
+  calibrate_sensors();
+
+  while(1){
+    //int error;
+    // Read the raw values.
+    MPU6050_GetRawAccelGyro(AccelGyro);
+
+    // Get the time of reading for rotation computations
+    unsigned long t_now = millis();
+    STM_EVAL_LEDToggle(LED5);
+    // The temperature sensor is -40 to +85 degrees Celsius.
+    // It is a signed integer.
+    // According to the datasheet:
+    //   340 per degrees Celsius, -512 at 35 degrees.
+    // At 0 degrees: -512 – (340 * 35) = -12412
+    //dT = ( (double) AccelGyro[TEMP] + 12412.0) / 340.0;
+
+    // Convert gyro values to degrees/sec
+    gyro_x = (AccelGyro[GYRO_X] - base_x_gyro) / FSSEL;
+    gyro_y = (AccelGyro[GYRO_Y] - base_y_gyro) / FSSEL;
+    gyro_z = (AccelGyro[GYRO_Z] - base_z_gyro) / FSSEL;
+
+    // Get raw acceleration values
+    accel_x = AccelGyro[ACC_X];
+    accel_y = AccelGyro[ACC_Y];
+    accel_z = AccelGyro[ACC_Z];
+
+    // Get angle values from accelerometer
+    //float accel_vector_length = sqrt(pow(accel_x,2) + pow(accel_y,2) + pow(accel_z,2));
+    float accel_angle_y = atan(-1*accel_x/sqrt(pow(accel_y,2) + pow(accel_z,2)))*RADIANS2DEGREES;
+    float accel_angle_x = atan(accel_y/sqrt(pow(accel_x,2) + pow(accel_z,2)))*RADIANS2DEGREES;
+
+    //float accel_angle_z = 0;
+
+    //// Compute the (filtered) gyro angles
+    //Get the value in second, a tick is every 10ms
+    dt = (t_now - last_read_time)/100.0;
+    float gyro_angle_x = gyro_x*dt + lastAngle[X];//get_last_x_angle();
+    float gyro_angle_y = gyro_y*dt + lastAngle[Y];//(get_last_y_angle();
+    float gyro_angle_z = gyro_z*dt + lastAngle[Z];//get_last_z_angle();
+
+    // Compute the drifting gyro angles
+    float unfiltered_gyro_angle_x = gyro_x*dt + lastGyroAngle[X];//get_last_gyro_x_angle();
+    float unfiltered_gyro_angle_y = gyro_y*dt + lastGyroAngle[Y];//get_last_gyro_y_angle();
+    float unfiltered_gyro_angle_z = gyro_z*dt + lastGyroAngle[Z];//get_last_gyro_z_angle();
+
+    // Apply the complementary filter to figure out the change in angle – choice of alpha is
+    // estimated now.  Alpha depends on the sampling rate…
+    float alpha = 0.96;
+    angle_x = alpha * gyro_angle_x + (1.0 - alpha) * accel_angle_x;
+    angle_y = alpha * gyro_angle_y + (1.0 - alpha) * accel_angle_y;
+    angle_z = gyro_angle_z;  //Accelerometer doesn’t give z-angle
+
+    //printf("%4.2f %4.2f %4.2f\r\n",angle_x,angle_y,angle_z);
+
+    //// Update the saved data with the latest values
+    set_last_read_angle_data(t_now, angle_x, angle_y, angle_z, unfiltered_gyro_angle_x, unfiltered_gyro_angle_y, unfiltered_gyro_angle_z);
+
+    //Send data on UART
+    *(float*)(aTxBuffer) = angle_x;
+    *(float*)(aTxBuffer+4) = angle_y;
+    *(float*)(aTxBuffer+8) = angle_z;
+
+   sendTxDMA((uint32_t)aTxBuffer,12);
+
+   Delay(2); //20 ms
+   
+  }
+  
+//  /* Wait until Tamper Button is pressed */
+//  while (!STM_EVAL_PBGetState(BUTTON_USER));  
+//
+//#ifdef USART_RECEIVER
+//  
+//   
+//    /* Enable DMA USART RX Stream */
+//  DMA_Cmd(USARTx_RX_DMA_STREAM,ENABLE);
+//  
+//  /* Enable USART DMA RX Requsts */
+//  USART_DMACmd(USARTx, USART_DMAReq_Rx, ENABLE);
+//  
+//  /* Waiting the end of Data transfer */
+//  while (USART_GetFlagStatus(USARTx,USART_FLAG_TC)==RESET);
+//    
+//  while(1){}
+//
+//#endif /* USART_RECEIVER */
 
 }
 
+void set_last_read_angle_data(unsigned long time, float x, float y, float z, float x_gyro, float y_gyro, float z_gyro) {
+last_read_time = time;
+lastAngle[X] = x;
+lastAngle[Y] = y;
+lastAngle[Z] = z;
+lastGyroAngle[X] = x_gyro;
+lastGyroAngle[Y] = y_gyro;
+lastGyroAngle[Z] = z_gyro;
+}
+
+// The sensor should be motionless on a horizontal surface
+//  while calibration is happening
+void calibrate_sensors() {
+int num_readings = 10;
+float x_accel = 0;
+float y_accel = 0;
+float z_accel = 0;
+float x_gyro = 0;
+float y_gyro = 0;
+float z_gyro = 0;
+
+// Discard the first set of values read from the IMU
+MPU6050_GetRawAccelGyro(AccelGyro);
+
+// Read and average the raw values from the IMU
+for (int i = 0; i < num_readings; i++) {
+  MPU6050_GetRawAccelGyro(AccelGyro);
+  x_accel += AccelGyro[ACC_X];
+  y_accel += AccelGyro[ACC_Y];
+  z_accel += AccelGyro[ACC_Z];
+  x_gyro += AccelGyro[GYRO_X];
+  y_gyro += AccelGyro[GYRO_Y];
+  z_gyro += AccelGyro[GYRO_Z];
+  Delay(10);
+}
+x_accel /= num_readings;
+y_accel /= num_readings;
+z_accel /= num_readings;
+x_gyro /= num_readings;
+y_gyro /= num_readings;
+z_gyro /= num_readings;
+
+// Store the raw calibration values globally
+base_x_accel = x_accel;
+base_y_accel = y_accel;
+base_z_accel = z_accel;
+base_x_gyro = x_gyro;
+base_y_gyro = y_gyro;
+base_z_gyro = z_gyro;
+
+//Serial.println("Finishing Calibration");
+}
 
 /**
   * @brief  Configures the USART Peripheral.
@@ -323,32 +475,6 @@ static void SysTickConfig(void)
   NVIC_SetPriority(SysTick_IRQn, 0x0);
 }
 
-#ifdef USART_RECEIVER
-
-/**
-  * @brief  Compares two buffers.
-  * @param  pBuffer1, pBuffer2: buffers to be compared.
-  * @param  BufferLength: buffer's length
-  * @retval PASSED: pBuffer1 identical to pBuffer2
-  *         FAILED: pBuffer1 differs from pBuffer2
-  */
-
-static TestStatus Buffercmp(uint8_t* pBuffer1, uint8_t* pBuffer2, uint16_t BufferLength)
-{
-  while (BufferLength--)
-  {
-    if (*pBuffer1 != *pBuffer2)
-    {
-      return FAILED;
-    }
-    pBuffer1++;
-    pBuffer2++;
-  }
-  
-  return PASSED;
-}
-
-#endif /* USART_RECEIVER */
 
 #ifdef  USE_FULL_ASSERT
 
@@ -370,6 +496,28 @@ void assert_failed(uint8_t* file, uint32_t line)
 }
 #endif
 
+unsigned long millis(){
+  return time_var2;
+}
+
+/*
+ * Called from systick handler
+ */
+void timing_handler() {
+	if (time_var1) {
+		time_var1--;
+	}
+	time_var2++;
+}
+
+/*
+ * Delay a number of systick cycles (1ms)
+ */
+void Delay(volatile uint32_t nCount) {
+	time_var1 = nCount;
+	while (time_var1) {
+	};
+}
 /**
 * @}
 */

@@ -152,6 +152,7 @@ void PendSV_Handler(void)
   */
 void SysTick_Handler(void)
 {
+  timing_handler();
   /* Decrement the timeout value */
   if (TimeOut != 0x0)
   {
