@@ -35,15 +35,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f4xx.h"
-#if defined (USE_STM324xG_EVAL)
-  //#include "stm324xg_eval.h"
 #include "stm32f4_discovery.h"
-#elif defined (USE_STM324x7I_EVAL) 
-  #include "stm324x7i_eval.h"
-   
-#else
- #error "Please select first the Evaluation board used in your application (in Project Options)"
-#endif
 
 /* Exported typedef ----------------------------------------------------------*/
 typedef enum {FAILED = 0, PASSED = !FAILED} TestStatus;
