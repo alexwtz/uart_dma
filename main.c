@@ -77,6 +77,37 @@ float angle_y;
 float angle_z;
 float dt;
 
+typedef enum {LEVELROLL = 0, LEVELPITCH = 1, LEVELGYROROLL = 2, LEVELGYROPITCH = 3} stabilisation;
+
+#define MAX_STAB 4
+#define WIND_UP_GUARD 500
+#define RC_MIN 1000
+#define RC_MAX 2000
+#define RC_ANGLE_MIN (-45)
+#define RC_ANGLE_MAX 45
+#define LEVEL_LIMIT 150
+typedef struct PIDdata {
+	float P;
+	float I;
+        float D;
+        float integratedError;
+        float lastPosition;
+} PIDdata;
+
+PIDdata PID[MAX_STAB];
+
+#define PITCH 0
+#define ROLL 1
+#define YAW 2
+#define INTENS 3
+int16_t rcBluetooth[4] = {1500,1500,1500,1500};
+float levelRoll;
+    float levelPitch;
+
+float motor[2];
+  float error;
+  float dTerm;
+float angl;
 /* Private function prototypes -----------------------------------------------*/
 static void USART_Config(void);
 static void SysTickConfig(void);
@@ -87,6 +118,10 @@ void set_last_read_angle_data(unsigned long time, float x, float y, float z, flo
 void calibrate_sensors();
 unsigned long millis();
 void Delay(volatile uint32_t nCount);
+void zeroError();
+float updatePID(float targetPosition, float currentPosition, struct PIDdata *PIDparameters,float dt);
+float constrain(float value, float borderLow, float borderHigh);
+float getAngleFromRC(int16_t rcValue);
 /* Private functions ---------------------------------------------------------*/
 
 /**
@@ -140,6 +175,8 @@ int main(void)
   //  to calibrate the acceleration sensor
   calibrate_sensors();
 
+  zeroError();
+  
   while(1){
     //int error;
     // Read the raw values.
@@ -196,13 +233,34 @@ int main(void)
     //// Update the saved data with the latest values
     set_last_read_angle_data(t_now, angle_x, angle_y, angle_z, unfiltered_gyro_angle_x, unfiltered_gyro_angle_y, unfiltered_gyro_angle_z);
 
-    //Send data on UART
+   //Stabilisation
+   // Stable Mode
+    angl = getAngleFromRC(rcBluetooth[ROLL]);
+    levelRoll = (getAngleFromRC(rcBluetooth[ROLL]) - angle_x) * PID[LEVELROLL].P;
+    levelPitch = (getAngleFromRC(rcBluetooth[PITCH]) - angle_y) * PID[LEVELPITCH].P;
+    // Check if pilot commands are not in hover, don't auto trim
+//    if ((abs(receiver.getTrimData(ROLL)) > levelOff) || (abs(receiver.getTrimData(PITCH)) > levelOff)) {
+//      zeroIntegralError();
+//    }
+//    else {
+      PID[LEVELROLL].integratedError = constrain(PID[LEVELROLL].integratedError + (((getAngleFromRC(rcBluetooth[ROLL]) - angle_x) * dt) * PID[LEVELROLL].I), -LEVEL_LIMIT, LEVEL_LIMIT);
+      PID[LEVELPITCH].integratedError = constrain(PID[LEVELPITCH].integratedError + (((getAngleFromRC(rcBluetooth[PITCH]) + angle_y) * dt) * PID[LEVELROLL].I), -LEVEL_LIMIT, LEVEL_LIMIT);
+//    }
+    //motors.setMotorAxisCommand(ROLL,
+    motor[ROLL] = updatePID(rcBluetooth[ROLL] + levelRoll, gyro_x + 1500, &PID[LEVELGYROROLL],dt) + PID[LEVELROLL].integratedError;//);
+    //motors.setMotorAxisCommand(PITCH,
+    motor[PITCH] = updatePID(rcBluetooth[PITCH] + levelPitch, gyro_y + 1500, &PID[LEVELGYROPITCH],dt) + PID[LEVELPITCH].integratedError;//);
+   
+        //Send data on UART
     *(float*)(aTxBuffer) = angle_x;
     *(float*)(aTxBuffer+4) = angle_y;
     *(float*)(aTxBuffer+8) = angle_z;
+    *(float*)(aTxBuffer+12) = motor[ROLL];
+    *(float*)(aTxBuffer+16) =  motor[PITCH];
 
-   sendTxDMA((uint32_t)aTxBuffer,12);
-
+   sendTxDMA((uint32_t)aTxBuffer,20);
+    
+    
    Delay(2); //20 ms
    
   }
@@ -226,6 +284,42 @@ int main(void)
 //
 //#endif /* USART_RECEIVER */
 
+}
+
+float val;
+
+float getAngleFromRC(int16_t rcValue){
+    val = (int16_t)constrain(rcValue,RC_MIN,RC_MAX);
+    val = RC_ANGLE_MIN+(val-RC_MIN)/(RC_MAX-RC_MIN)*(RC_ANGLE_MAX-RC_ANGLE_MIN);
+    return val;
+}
+
+float updatePID(float targetPosition, float currentPosition, struct PIDdata *PIDparameters,float dt) {
+
+  error = targetPosition - currentPosition;
+  
+  PIDparameters->integratedError += error * dt;
+  PIDparameters->integratedError = constrain(PIDparameters->integratedError, -WIND_UP_GUARD, WIND_UP_GUARD);
+  
+  dTerm = PIDparameters->D * (currentPosition - PIDparameters->lastPosition) / dt;
+  PIDparameters->lastPosition = currentPosition;
+  return (PIDparameters->P * error) + (PIDparameters->I * (PIDparameters->integratedError)) + dTerm;
+}
+
+float constrain(float value, float borderLow, float borderHigh){
+  if(value < borderLow)return borderLow;
+  if(value > borderHigh) return borderHigh;
+  return value;
+}
+void zeroError() {
+  int8_t axis;
+  for (axis = LEVELROLL; axis < MAX_STAB; axis++){
+    PID[axis].P = 3;
+    PID[axis].I = 0.8;
+    PID[axis].D = 0.7;
+    PID[axis].lastPosition = 0;
+    PID[axis].integratedError = 0;
+  }
 }
 
 void set_last_read_angle_data(unsigned long time, float x, float y, float z, float x_gyro, float y_gyro, float z_gyro) {
