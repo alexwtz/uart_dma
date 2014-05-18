@@ -230,7 +230,11 @@ void MPU6050_SetSleepModeStatus(FunctionalState NewState)
 void MPU6050_GetRawAccelGyro(s16* AccelGyro) 
 {
     u8 tmpBuffer[14]; 
-    MPU6050_I2C_BufferRead(MPU6050_DEFAULT_ADDRESS, tmpBuffer, MPU6050_RA_ACCEL_XOUT_H, 14); 
+    while(!MPU6050_I2C_BufferRead(MPU6050_DEFAULT_ADDRESS, tmpBuffer, MPU6050_RA_ACCEL_XOUT_H, 14)){
+      MPU6050_Initialize();
+      if (!MPU6050_TestConnection())
+        while(1);
+    }
     /* Get acceleration */
     for(int i=0; i<3; i++) 
       AccelGyro[i]=((s16)((u16)tmpBuffer[2*i] << 8) + tmpBuffer[2*i+1]);
@@ -415,25 +419,24 @@ void MPU6050_I2C_ByteWrite(u8 slaveAddr, u8* pBuffer, u8 writeAddr)
 * @return None
 */
 
-void MPU6050_I2C_BufferRead(u8 slaveAddr, u8* pBuffer, u8 readAddr, u16 NumByteToRead)
+bool MPU6050_I2C_BufferRead(u8 slaveAddr, u8* pBuffer, u8 readAddr, u16 NumByteToRead)
 {
  // ENTR_CRT_SECTION();
 
+  uint16_t timeout = 1000;
+  
   /* While the bus is busy */
-  while(I2C_GetFlagStatus(MPU6050_I2C, I2C_FLAG_BUSY));
-
+  while(I2C_GetFlagStatus(MPU6050_I2C, I2C_FLAG_BUSY))if(!timeout--)return FALSE;
   /* Send START condition */
   I2C_GenerateSTART(MPU6050_I2C, ENABLE);
 
   /* Test on EV5 and clear it */
-  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_MODE_SELECT));
-
+  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_MODE_SELECT))if(!timeout--)return FALSE;
   /* Send MPU6050 address for write */
   I2C_Send7bitAddress(MPU6050_I2C, slaveAddr, I2C_Direction_Transmitter); 
 
   /* Test on EV6 and clear it */
-  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED));
-
+  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED))if(!timeout--)return FALSE;
   /* Clear EV6 by setting again the PE bit */
   I2C_Cmd(MPU6050_I2C, ENABLE);
 
@@ -441,20 +444,17 @@ void MPU6050_I2C_BufferRead(u8 slaveAddr, u8* pBuffer, u8 readAddr, u16 NumByteT
   I2C_SendData(MPU6050_I2C, readAddr);
 
   /* Test on EV8 and clear it */
-  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_BYTE_TRANSMITTED));
-
+  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_BYTE_TRANSMITTED))if(!timeout--)return FALSE;
   /* Send STRAT condition a second time */
   I2C_GenerateSTART(MPU6050_I2C, ENABLE);
 
   /* Test on EV5 and clear it */
-  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_MODE_SELECT));
-
+  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_MODE_SELECT))if(!timeout--)return FALSE;
   /* Send MPU6050 address for read */
   I2C_Send7bitAddress(MPU6050_I2C, slaveAddr, I2C_Direction_Receiver);
 
   /* Test on EV6 and clear it */
-  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_RECEIVER_MODE_SELECTED));
-
+  while(!I2C_CheckEvent(MPU6050_I2C, I2C_EVENT_MASTER_RECEIVER_MODE_SELECTED))if(!timeout--)return FALSE;
   /* While there is data to be read */
   while(NumByteToRead)
   {
@@ -484,6 +484,7 @@ void MPU6050_I2C_BufferRead(u8 slaveAddr, u8* pBuffer, u8 readAddr, u16 NumByteT
   /* Enable Acknowledgement to be ready for another reception */
   I2C_AcknowledgeConfig(MPU6050_I2C, ENABLE);
 //  EXT_CRT_SECTION();
+  return TRUE;
 
 }
 /**

@@ -34,6 +34,7 @@
 #endif 
 
 /* Includes ------------------------------------------------------------------*/
+#include "stm32f4xx_conf.h"
 #include "stm32f4xx.h"
 #include "stm32f4_discovery.h"
 
@@ -107,6 +108,11 @@ typedef enum {FAILED = 0, PASSED = !FAILED} TestStatus;
 #define FSSEL  131
 #define GCONVERT 16384
 #define RADIANS2DEGREES (180/3.14159)
+
+//On = 2ms Off=1ms
+#define SPEED_100 2000
+#define SPEED_0   1000
+#define SPEED_RANGE (SPEED_100-SPEED_0)
 
 /* Misc definition ************************************************************/
 /* Transmit buffer size */
