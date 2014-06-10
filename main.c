@@ -176,19 +176,22 @@ int main(void)
   TIM1_Config();
   PWM1_Config(10000);
   
-          //Set motor speed
+  /* Tamper Button Configuration ---------------------------------------------*/
+  STM_EVAL_PBInit(BUTTON_USER,BUTTON_MODE_GPIO);
+    
+  //Set motor speed
   PWM_SetDC(1, SPEED_100); //PE9 | PC6//ON 2ms
   PWM_SetDC(2, SPEED_100); //PE11 | PC 7
   PWM_SetDC(3, SPEED_100); //PE13
   PWM_SetDC(4, SPEED_100); //PE14
+
+  //  /* Wait until Tamper Button is released */
+  while (STM_EVAL_PBGetState(BUTTON_USER));  
   
   PWM_SetDC(1, SPEED_0); //PE9 | PC6//ON 2ms
   PWM_SetDC(2, SPEED_0); //PE11 | PC 7
   PWM_SetDC(3, SPEED_0); //PE13
   PWM_SetDC(4, SPEED_0); //PE14
-        
-  /* Tamper Button Configuration ---------------------------------------------*/
-  STM_EVAL_PBInit(BUTTON_USER,BUTTON_MODE_GPIO);
 
   /* Initialization of the accelerometer -------------------------------------*/
   MPU6050_I2C_Init();
@@ -215,7 +218,32 @@ int main(void)
   USART_DMACmd(USARTx, USART_DMAReq_Rx, ENABLE);
   
   while(1){
-    //int error;
+    //--------------------------------------------------------
+    //------ Used to configure the speed controller ----------
+    //--------------------------------------------------------
+    
+    // press blue button to force motor at SPEED_100
+    if (STM_EVAL_PBGetState(BUTTON_USER)){
+      PWM_SetDC(1, SPEED_100); //PE9 | PC6//ON 2ms
+      PWM_SetDC(2, SPEED_100); //PE11 | PC 7
+      PWM_SetDC(3, SPEED_100); //PE13
+      PWM_SetDC(4, SPEED_100); //PE14
+      
+      //  /* Wait until Tamper Button is released */
+      while (STM_EVAL_PBGetState(BUTTON_USER));  
+      
+      PWM_SetDC(1, SPEED_0); //PE9 | PC6//ON 2ms
+      PWM_SetDC(2, SPEED_0); //PE11 | PC 7
+      PWM_SetDC(3, SPEED_0); //PE13
+      PWM_SetDC(4, SPEED_0); //PE14
+      
+      Delay(100);
+    }
+    
+    //--------------------------------------------------------
+    //------ Get gyro information                   ----------
+    //--------------------------------------------------------
+    
     // Read the raw values.
     MPU6050_GetRawAccelGyro(AccelGyro);
 
@@ -298,33 +326,12 @@ int main(void)
     *(float*)(aTxBuffer+8) = angle_z;
     *(float*)(aTxBuffer+12) = motor[ROLL];
     *(float*)(aTxBuffer+16) =  motor[PITCH];
-
-   //sendTxDMA((uint32_t)aTxBuffer,20);
-    
-    
+   sendTxDMA((uint32_t)aTxBuffer,20);
+   
+   //Wait a little bit
    Delay(3); //30 ms
    
   }
-  
-//  /* Wait until Tamper Button is pressed */
-//  while (!STM_EVAL_PBGetState(BUTTON_USER));  
-//
-//#ifdef USART_RECEIVER
-//  
-//   
-//    /* Enable DMA USART RX Stream */
-//  DMA_Cmd(USARTx_RX_DMA_STREAM,ENABLE);
-//  
-//  /* Enable USART DMA RX Requsts */
-//  USART_DMACmd(USARTx, USART_DMAReq_Rx, ENABLE);
-//  
-//  /* Waiting the end of Data transfer */
-//  while (USART_GetFlagStatus(USARTx,USART_FLAG_TC)==RESET);
-//    
-//  while(1){}
-//
-//#endif /* USART_RECEIVER */
-
 }
 
 void getLastSpeedFromMsg(){
@@ -441,7 +448,6 @@ void PWM_SetDC(uint16_t channel, uint16_t dutycycle) {
 	if (channel == 1) {
 		TIM3->CCR1 = dutycycle;
 		TIM1->CCR1 = dutycycle;
-
 	} else if (channel == 2) {
 		TIM3->CCR2 = dutycycle;
 		TIM1->CCR2 = dutycycle;
@@ -678,7 +684,7 @@ static void USART_Config(void)
   DMA_ITConfig(USARTx_RX_DMA_STREAM,DMA_IT_TC,ENABLE);
   
   NVIC_InitStructure.NVIC_IRQChannel = USARTx_DMA_RX_IRQn;		 // we want to configure the DMA RX interrupts
-	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;// this sets the priority group of the DMA RX interrupts
+  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;// this sets the priority group of the DMA RX interrupts
 	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;		 // this sets the subpriority inside the group
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;			 // the USART1 interrupts are globally enabled
 	NVIC_Init(&NVIC_InitStructure);						
@@ -689,25 +695,23 @@ static void USART_Config(void)
 
 // this is the interrupt request handler (IRQ) for ALL USART1 interrupts
 void USARTx_DMA_RX_IRQHandler(void){
-
 	// check if the USART1 receive interrupt flag was set
 	if( DMA_GetITStatus(USARTx_RX_DMA_STREAM,USARTx_RX_DMA_FLAG_TCIF)==RESET ){
-              //while (DMA_GetFlagStatus(USARTx_RX_DMA_STREAM,USARTx_RX_DMA_FLAG_TCIF)==RESET);
+            //while (DMA_GetFlagStatus(USARTx_RX_DMA_STREAM,USARTx_RX_DMA_FLAG_TCIF)==RESET);
           
-          /* Clear DMA Transfer Complete Flags */
-          DMA_ClearFlag(USARTx_RX_DMA_STREAM,USARTx_RX_DMA_FLAG_TCIF);
-          stopRXDMA();
-          uint8_t i = 0;
-          for(;i<RX_CMD_SIZE;i++){
-            if(aRxBuffer[idx][i]=='U'){
-              memcpy(msgRcvd[idx],aRxBuffer[idx]+i,RX_CMD_SIZE);
-              STM_EVAL_LEDToggle(LED6);
-              break;
+            /* Clear DMA Transfer Complete Flags */
+            DMA_ClearFlag(USARTx_RX_DMA_STREAM,USARTx_RX_DMA_FLAG_TCIF);
+            stopRXDMA();
+            uint8_t i = 0;
+            for(;i<RX_CMD_SIZE;i++){
+              if(aRxBuffer[idx][i]=='U'){
+                memcpy(msgRcvd[idx],aRxBuffer[idx]+i,RX_CMD_SIZE);
+                STM_EVAL_LEDToggle(LED6);
+                break;
+              }
             }
-          }
-          idx=(idx+1)%RX_CMD_BUFFER_SIZE;
-          startRXDMAForSize((uint32_t) aRxBuffer[idx],RX_CMD_SIZE);
-          
+            idx=(idx+1)%RX_CMD_BUFFER_SIZE;
+            startRXDMAForSize((uint32_t) aRxBuffer[idx],RX_CMD_SIZE);
 	}
 }
 
@@ -810,7 +814,7 @@ void timing_handler() {
 }
 
 /*
- * Delay a number of systick cycles (1ms)
+ * Delay a number of systick cycles (10ms)
  */
 void Delay(volatile uint32_t nCount) {
 	time_var1 = nCount;

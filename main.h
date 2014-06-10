@@ -112,7 +112,7 @@ typedef enum {FAILED = 0, PASSED = !FAILED} TestStatus;
 //On = 2ms Off=1ms
 #define SPEED_100 2000
 #define SPEED_0   1000
-#define SPEED_RANGE (SPEED_100-SPEED_0)
+#define SPEED_RANGE (SPEED_100-SPEED_0)/100.0
 
 /* Misc definition ************************************************************/
 /* Transmit buffer size */
